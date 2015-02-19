@@ -7,6 +7,8 @@ import glob
 import os
 import sys
 
+import gzip
+import cPickle
 import numpy
 try:
     import pylab
@@ -71,11 +73,48 @@ def get_clip_rmsprop_updates(params, cost, gparams,
     return updates
 
 
-def shared_normal(num_rows, num_cols, scale=1):
+class _ElemwiseNoGradient(theano.tensor.Elemwise):
+    """
+    A Theano Op that applies an elementwise transformation and reports
+    having no gradient.
+    """
+
+    def connection_pattern(self, node):
+        """
+        Report being disconnected to all inputs in order to have no gradient
+        at all.
+
+        Parameters
+        ----------
+        node : WRITEME
+        """
+        return [[False]]
+
+    def grad(self, inputs, output_gradients):
+        """
+        Report being disconnected to all inputs in order to have no gradient
+        at all.
+
+        Parameters
+        ----------
+        inputs : WRITEME
+        output_gradients : WRITEME
+        """
+        return [theano.gradient.DisconnectedType()()]
+
+# Call this on a theano variable to make a copy of that variable
+# No gradient passes through the copying operation
+# This is equivalent to making my_copy = var.copy() and passing
+# my_copy in as part of consider_constant to tensor.grad
+# However, this version doesn't require as much long range
+# communication between parts of the code
+block_gradient = _ElemwiseNoGradient(theano.scalar.identity)
+
+def shared_normal(num_rows, num_cols, scale=1, name = 'W'):
     '''Initialize a matrix shared variable with normally distributed
     elements.'''
     return theano.shared(numpy.random.normal(
-        scale=scale, size=(num_rows, num_cols)).astype(theano.config.floatX))
+        scale=scale, size=(num_rows, num_cols)).astype(theano.config.floatX), name = name)
 
 
 def shared_zeros(*shape):
@@ -121,48 +160,48 @@ def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10):
         
     #Generate h_t_enc = RNN_enc(h_tm1_enc, v_enc)
     bi_enc = shared_zeros(n_hidden_recurrent)
-    Wci_enc = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001)
-    Whi_enc = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001)
-    Wvi_enc = shared_normal((2*n_visible) + n_hidden_recurrent, n_hidden_recurrent, 0.0001)
+    Wci_enc = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001, 'Wci_enc')
+    Whi_enc = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001, 'Whi_enc')
+    Wvi_enc = shared_normal((2*n_visible) + n_hidden_recurrent, n_hidden_recurrent, 0.0001, 'Wvi_enc')
 
     bf_enc = shared_zeros(n_hidden_recurrent)
-    Wcf_enc = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001)
-    Whf_enc = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001)
-    Wvf_enc = shared_normal((2*n_visible) + n_hidden_recurrent, n_hidden_recurrent, 0.0001)
+    Wcf_enc = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001, 'Wcf_enc')
+    Whf_enc = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001, 'Whf_enc')
+    Wvf_enc = shared_normal((2*n_visible) + n_hidden_recurrent, n_hidden_recurrent, 0.0001, 'Wvf_enc')
     
-    Wvc_enc = shared_normal((2*n_visible) + n_hidden_recurrent, n_hidden_recurrent, 0.0001) 
-    Whc_enc = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001)
+    Wvc_enc = shared_normal((2*n_visible) + n_hidden_recurrent, n_hidden_recurrent, 0.0001, 'Wvc_enc') 
+    Whc_enc = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001, 'Whc_enc')
     bc_enc = shared_zeros(n_hidden_recurrent)
     
     bo_enc = shared_zeros(n_hidden_recurrent)
-    Wco_enc = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001) 
-    Who_enc = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001)
-    Wvo_enc = shared_normal((2*n_visible) + n_hidden_recurrent, n_hidden_recurrent, 0.0001)
+    Wco_enc = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001, 'Wco_enc') 
+    Who_enc = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001, 'Who_enc')
+    Wvo_enc = shared_normal((2*n_visible) + n_hidden_recurrent, n_hidden_recurrent, 0.0001, 'Wvo_enc')
 
     bi_dec = shared_zeros(n_hidden_recurrent)
-    Wci_dec = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001)
-    Whi_dec = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001)
-    Wzi_dec = shared_normal(n_visible, n_hidden_recurrent, 0.0001)
+    Wci_dec = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001, 'Wci_dec')
+    Whi_dec = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001, 'Whi_dec')
+    Wzi_dec = shared_normal(n_visible, n_hidden_recurrent, 0.0001, 'Wzi_dec')
 
     bf_dec = shared_zeros(n_hidden_recurrent)
-    Wcf_dec = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001)
-    Whf_dec = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001)
-    Wzf_dec = shared_normal(n_visible, n_hidden_recurrent, 0.0001)
+    Wcf_dec = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001, 'Wcf_dec')
+    Whf_dec = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001, 'Whf_dec')
+    Wzf_dec = shared_normal(n_visible, n_hidden_recurrent, 0.0001, 'Wzf_dec')
     
-    Wzc_dec = shared_normal(n_visible, n_hidden_recurrent, 0.0001)
-    Whc_dec = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001)
+    Wzc_dec = shared_normal(n_visible, n_hidden_recurrent, 0.0001, 'Wzc_dec')
+    Whc_dec = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001, 'Whc_dec')
     bc_dec = shared_zeros(n_hidden_recurrent)
     
     bo_dec = shared_zeros(n_hidden_recurrent)
-    Wco_dec = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001) 
-    Who_dec = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001)
-    Wzo_dec = shared_normal(n_visible, n_hidden_recurrent, 0.0001)
+    Wco_dec = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001, 'Wco_dec') 
+    Who_dec = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001, 'Who_dec')
+    Wzo_dec = shared_normal(n_visible, n_hidden_recurrent, 0.0001, 'Wzo_dec')
 
-    Wh_enc_mew = shared_normal(n_hidden_recurrent, n_z, 0.0001) 
+    Wh_enc_mew = shared_normal(n_hidden_recurrent, n_z, 0.0001, 'Wh_enc_mew') 
 
-    Www = shared_normal(n_visible, n_visible, 0.0001) 
+    Www = shared_normal(n_visible, n_visible, 0.0001, 'Www') 
 
-    params = [bi_enc, Wci_enc, Whi_enc, Wvi_enc, bf_enc, Wcf_enc, Whf_enc, Wvc_enc, Wvf_enc,
+    params = [bi_enc, Wci_enc,  Whi_enc, Wvi_enc, bf_enc, Wcf_enc, Whf_enc, Wvc_enc, Wvf_enc,
     Whc_enc, bc_enc, bo_enc, Wco_enc, Who_enc, Wvo_enc, bi_dec, Wci_dec, Whi_dec,
     Wzi_dec, bf_dec, Wcf_dec, Whf_dec, Wzf_dec, Wzc_dec, Whc_dec, bc_dec, bo_dec,
     Wco_dec, Who_dec, Wzo_dec, Wh_enc_mew, Www]
@@ -171,7 +210,7 @@ def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10):
 
     v = T.matrix()  # a training sequencei
 
-    z_t = T.vector('z_t')
+    #z_t = T.vector('z_t')
     # initial value for the RNN_enc hidden units
     h0_enc = T.zeros((n_hidden_recurrent,))
     c0_enc = T.zeros((n_hidden_recurrent,))
@@ -181,10 +220,6 @@ def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10):
 
     w0 = T.zeros((n_visible, )) 
 
-    n_seq = [bi_enc, Wci_enc, Whi_enc, Wvi_enc, bf_enc, Wcf_enc, Whf_enc, Wvc_enc, Wvf_enc,
-    Whc_enc, bc_enc, bo_enc, Wco_enc, Who_enc, Wvo_enc, bi_dec, Wci_dec, Whi_dec,
-    Wzi_dec, bf_dec, Wcf_dec, Whf_dec, Wzf_dec, Wzc_dec, Whc_dec, bc_dec, bo_dec,
-    Wco_dec, Who_dec, Wzo_dec, Wh_enc_mew, Www, z_t]
     # If `v_t` is given, deterministic recurrence to compute the variable
     # biases bv_t, bh_t at each time step. If `v_t` is None, same recurrence
     # but with a separate Gibbs chain at each time step to sample (generate)
@@ -207,8 +242,7 @@ def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10):
         # Get z_t
         mew_t = T.dot(h_t_enc, Wh_enc_mew )
         sigma_t = T.exp(mew_t)
-        z_t = mew_t + sigma_t * theano_rng.normal(size=mew_t.shape, avg = 0, std = 1, dtype=theano.config.floatX)
-
+        z_t = mew_t + sigma_t# * theano_rng.normal(size=mew_t.shape, avg = 0, std = 1, dtype=theano.config.floatX))
 
         # Generate h_t_dec = RNN_dec(h_tm1_dec, z_t) 
         i_t_dec = T.nnet.sigmoid(bi_dec + T.dot(c_tm1_dec, Wci_dec) + T.dot(h_tm1_dec, Whi_dec) + T.dot(z_t, Wzi_dec))
@@ -245,7 +279,7 @@ def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10):
 
     (h_t_enc, h_t_dec, c_t_enc, c_t_dec, w_t, mew_t, sigma_t), updates_train = theano.scan(
         lambda v_t, h_tm1_enc, h_tm1_dec, c_tm1_enc, c_tm1_dec, w_tm1, *_: recurrence(v_t, h_tm1_enc, h_tm1_dec, c_tm1_enc, c_tm1_dec, w_tm1),
-        sequences=v, outputs_info=[h0_enc, h0_dec, c0_enc, c0_dec, None, None, None], non_sequences=n_seq)
+        sequences=v, outputs_info=[h0_enc, h0_dec, c0_enc, c0_dec, None, None, None], non_sequences=params)
 
 
     L_z = -(T.mean( 0.5 * ( (mew_t ** 2).sum() + (sigma_t ** 2).sum() - ( T.log(sigma_t ** 2) ).sum() ) ) - ( T_ / 2 ))
@@ -277,8 +311,8 @@ class RnnRbm:
 
     def __init__(
         self,
-        n_z = 100,
-        n_hidden_recurrent=100,
+        n_z = 784,
+        n_hidden_recurrent=784,
         T_ = 10,
         lr=0.001,
         r=(1, 785),
@@ -305,6 +339,7 @@ class RnnRbm:
 
         self.r = r
         self.dt = dt
+        self.T_ = T_
         (v, cost, monitor, params, updates_train, w_t,
             updates_generate) = build_rnn(
                 r[1] - r[0],
@@ -327,7 +362,7 @@ class RnnRbm:
             updates=updates_generate
         )
 
-    def train(self, files, batch_size=100, num_epochs=200):
+    def train(self,  batch_size=100, num_epochs=200):
         '''Train the RNN-RBM via stochastic gradient descent (SGD) using MIDI
         files converted to piano-rolls.
 
@@ -343,19 +378,19 @@ class RnnRbm:
         f = gzip.open('../data/mnist.pkl.gz' ,'rb')
         train_set, valid_set, test_set = cPickle.load(f)
         f.close()
-
+        train_set_x = train_set[0]
         try:
             for epoch in xrange(num_epochs):
                 numpy.random.shuffle(train_set[0])
                 costs = []
 
-                for s, sequence in enumerate(train_set[0]):
-                    cost = self.train_function([sequence for i in range(10)] )
+                for image in train_set_x:
+                    cost = self.train_function([image for i in range(self.T_)] )
                     costs.append(cost)
 
-                print 'Epoch %i/%i' % (epoch + 1, num_epochs),
-                print numpy.mean(costs)
-                sys.stdout.flush()
+                    print 'Epoch %i/%i' % (epoch + 1, num_epochs),
+                    print numpy.mean(costs)
+                    sys.stdout.flush()
 
         except KeyboardInterrupt:
             print 'Interrupted by user.'
