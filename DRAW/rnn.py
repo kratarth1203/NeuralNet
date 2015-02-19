@@ -366,8 +366,6 @@ class RnnRbm:
         '''Train the RNN-RBM via stochastic gradient descent (SGD) using MIDI
         files converted to piano-rolls.
 
-        files : list of strings
-            List of MIDI files that will be loaded as piano-rolls for training.
         batch_size : integer
             Training sequences will be split into subsequences of at most this
             size before applying the SGD updates.
@@ -396,27 +394,13 @@ class RnnRbm:
             print 'Interrupted by user.'
 
     def generate(self, filename, show=True):
-        '''Generate a sample sequence, plot the resulting piano-roll and save
-        it as a MIDI file.
 
-        filename : string
-            A MIDI file will be created at this location.
-        show : boolean
-            If True, a piano-roll of the generated sequence will be shown.'''
-
-        piano_roll = self.generate_function()
-        '''
-        midiwrite(filename, piano_roll, self.r, self.dt)
-        if show:
-            extent = (0, self.dt * len(piano_roll)) + self.r
-            pylab.figure()
-            pylab.imshow(piano_roll.T, origin='lower', aspect='auto',
-                         interpolation='nearest', cmap=pylab.cm.gray_r,
-                         extent=extent)
-            pylab.xlabel('time (s)')
-            pylab.ylabel('MIDI note number')
-            pylab.title('generated piano-roll')
-        '''
+        n_samples_to_gen = 5
+        for i in range(n_samples_to_gen):
+            g = self.generate_function()
+            f = open('sample_rnn_%i.pkl' % i, 'w')
+            cPickle.dump(g,f)
+            f.close()
 
 def test_rnnrbm(batch_size=100, num_epochs=200):
     model = RnnRbm()
