@@ -392,7 +392,7 @@ class RnnRbm:
             Number of epochs (pass over the training set) performed. The user
             can safely interrupt training with Ctrl+C at any time.'''
 
-        f = gzip.open('../data/mnist.pkl.gz' ,'rb')
+        f = gzip.open('data/mnist.pkl.gz' ,'rb')
         train_set, valid_set, test_set = cPickle.load(f)
         f.close()
         #train_set, valid_set, test_set = load_data()
