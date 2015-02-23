@@ -405,7 +405,7 @@ class RnnRbm:
                     cost = self.train_function( to_train )
                     costs.append(cost)
 
-                    print 'Epoch %i/%i' % (epoch + 1, num_epochs),
+                    print 'Epoch %i/%i batch_processed %i/%i' % (epoch + 1, num_epochs, i, len(train_set_x)),
                     print numpy.mean(costs)
                     sys.stdout.flush()
 
