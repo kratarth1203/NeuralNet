@@ -312,10 +312,10 @@ def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10, bat
             )
         )
     '''
-    L_x = T.nnet.binary_crossentropy( w_t[-1,:,:], v)
+    L_x = T.nnet.binary_crossentropy( T.nnet.sigmoid(w_t[-1,:,:]),  v)
 
-    cost = (L_z).mean()
-    monitor = L_z.mean()
+    cost = (L_z + L_x).mean()
+    monitor = L_x.mean()
     # symbolic loop for sequence generation
     (h_t, c_t, w_t), updates_generate = theano.scan(
         lambda h_tm1, c_tm1, w_tm1, *_: generate(h_tm1, c_tm1, w_tm1),
@@ -325,9 +325,8 @@ def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10, bat
             updates_generate)
 
 
-class RnnRbm:
-    '''Simple class to train an RNN-RBM from MIDI files and to generate sample
-    sequences.'''
+class Rnn:
+    '''Simple class to train an DRAW.'''
 
     def __init__(
         self,
@@ -348,11 +347,6 @@ class RnnRbm:
             Number of hidden units of the RNN.
         lr : float
             Learning rate
-        r : (integer, integer) tuple
-            Specifies the pitch range of the piano-roll in MIDI note numbers,
-            including r[0] but not r[1], such that r[1]-r[0] is the number of
-            visible units of the RBM at a given time step. The default (21,
-            109) corresponds to the full range of piano (88 notes).
         '''
 
         self.r = r
@@ -422,14 +416,13 @@ class RnnRbm:
             cPickle.dump(g,f)
             f.close()
 
-def test_rnnrbm(batch_size=100, num_epochs=200):
-    model = RnnRbm()
+def test_rnnrbm(batch_size=5000, num_epochs=200):
+    model = Rnn(batch_size = 5000)
     model.train(batch_size=batch_size, num_epochs=num_epochs)
     return model
 
 if __name__ == '__main__':
     model = test_rnnrbm()
     model.generate('sample1.mid')
-    model.generate('sample2.mid')
     pylab.show()
  
