@@ -339,7 +339,6 @@ class RnnRbm:
         T_ = 10,
         lr=0.001,
         r=(1, 785),
-        dt=0.3,
         momentum=0.99999
     ):
         '''Constructs and compiles Theano functions for training and sequence
@@ -351,17 +350,8 @@ class RnnRbm:
             Number of hidden units of the RNN.
         lr : float
             Learning rate
-        r : (integer, integer) tuple
-            Specifies the pitch range of the piano-roll in MIDI note numbers,
-            including r[0] but not r[1], such that r[1]-r[0] is the number of
-            visible units of the RBM at a given time step. The default (21,
-            109) corresponds to the full range of piano (88 notes).
-        dt : float
-            Sampling period when converting the MIDI files into piano-rolls, or
-            equivalently the time difference between consecutive time steps.'''
-
+        '''
         self.r = r
-        self.dt = dt
         self.T_ = T_
         (v, cost, monitor, updates_train, w_t,
             updates_generate) = build_rnn()
