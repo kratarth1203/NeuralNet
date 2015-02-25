@@ -211,7 +211,7 @@ def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10, bat
     # variables
 
     v = T.matrix()  # a training sequencei
-
+    
     non_seq = [v, bi_enc, Wci_enc,  Whi_enc, Wvi_enc, bf_enc, Wcf_enc, Whf_enc, Wvc_enc, Wvf_enc,
     Whc_enc, bc_enc, bo_enc, Wco_enc, Who_enc, Wvo_enc, bi_dec, Wci_dec, Whi_dec,
     Wzi_dec, bf_dec, Wcf_dec, Whf_dec, Wzf_dec, Wzc_dec, Whc_dec, bc_dec, bo_dec,
@@ -234,7 +234,7 @@ def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10, bat
     # but with a separate Gibbs chain at each time step to sample (generate)
     # from the RNN-RBM. The resulting sample v_t is returned in order to be
     # passed down to the sequence history.
-    def recurrence( h_tm1_enc, h_tm1_dec, c_tm1_enc, c_tm1_dec, w_tm1, v):
+    def recurrence( sample_t, h_tm1_enc, h_tm1_dec, c_tm1_enc, c_tm1_dec, w_tm1, v):
         v_hat = v - T.nnet.sigmoid(w_tm1) #error input
         r_t = T.concatenate( [v , v_hat], axis = 1 ) 
         
@@ -252,7 +252,7 @@ def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10, bat
         mew_t = T.dot(h_t_enc, Wh_enc_mew )
         sigma_t = mew_t
         #sample =  theano_rng.normal(size=mew_t.shape, avg = 0, std = 1, dtype=theano.config.floatX)
-        z_t = mew_t + T.exp(sigma_t)
+        z_t = mew_t + (T.exp(sigma_t) * sample_t )
         # Generate h_t_dec = RNN_dec(h_tm1_dec, z_t) 
         i_t_dec = T.nnet.sigmoid(bi_dec + T.dot(c_tm1_dec, Wci_dec) + T.dot(h_tm1_dec, Whi_dec) + T.dot(z_t, Wzi_dec))
         f_t_dec = T.nnet.sigmoid(bf_dec + T.dot(c_tm1_dec, Wcf_dec) + T.dot(h_tm1_dec, Whf_dec) + T.dot(z_t , Wzf_dec))
@@ -285,12 +285,13 @@ def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10, bat
     # For training, the deterministic recurrence is used to compute all the
     # {bv_t, bh_t, 1 <= t <= T} given v. Conditional RBMs can then be trained
     # in batches using those parameters.
+    rand_samples =  theano_rng.normal(size=(T_, n_z), avg = 0, std = 1, dtype=theano.config.floatX)
 
+  
     (h_t_enc, h_t_dec, c_t_enc, c_t_dec, w_t, mew_t, sigma_t ), updates_train = theano.scan(
-        lambda h_tm1_enc, h_tm1_dec, c_tm1_enc, c_tm1_dec, w_tm1, v, *_: recurrence( h_tm1_enc, h_tm1_dec, c_tm1_enc, c_tm1_dec, w_tm1, v),
-        sequences=[], outputs_info=[h0_enc, h0_dec, c0_enc, c0_dec, w0, None, None], non_sequences=non_seq, n_steps = T_)
+        lambda sample_t, h_tm1_enc, h_tm1_dec, c_tm1_enc, c_tm1_dec, w_tm1, v, *_: recurrence( sample_t, h_tm1_enc, h_tm1_dec, c_tm1_enc, c_tm1_dec, w_tm1, v),
+        sequences=[rand_samples], outputs_info=[h0_enc, h0_dec, c0_enc, c0_dec, w0, None, None], non_sequences=non_seq)
 
-    
    
     L_z = (
         prior_log_sigma - sigma_t
@@ -315,7 +316,7 @@ def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10, bat
     L_x = T.nnet.binary_crossentropy( T.nnet.sigmoid(w_t[-1,:,:]),  v)
 
     cost = (L_z + L_x).mean()
-    monitor = L_x.mean()
+    monitor = (L_z ).mean()
     # symbolic loop for sequence generation
     (h_t, c_t, w_t), updates_generate = theano.scan(
         lambda h_tm1, c_tm1, w_tm1, *_: generate(h_tm1, c_tm1, w_tm1),
@@ -333,7 +334,7 @@ class Rnn:
         n_z = 50,
         n_hidden_recurrent=100,
         T_ = 6,
-        lr=0.001,
+        lr=0.01,
         r=(1, 785),
         batch_size = 100,
         momentum=0.99999
