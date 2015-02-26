@@ -198,13 +198,14 @@ def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10, bat
     Wzo_dec = shared_normal(n_z, n_hidden_recurrent, 0.0001, 'Wzo_dec')
 
     Wh_enc_mew = shared_normal(n_hidden_recurrent, n_z, 0.0001, 'Wh_enc_mew') 
+    Wh_enc_sig = shared_normal(n_hidden_recurrent, n_z, 0.0001, 'Wh_enc_sig') 
 
-    Www = shared_normal(n_visible, n_visible, 0.0001, 'Www') 
+    Wh_dec_w = shared_normal(n_hidden_recurrent, n_visible, 0.0001, 'Www') 
 
     params = [bi_enc, Wci_enc,  Whi_enc, Wvi_enc, bf_enc, Wcf_enc, Whf_enc, Wvc_enc, Wvf_enc,
     Whc_enc, bc_enc, bo_enc, Wco_enc, Who_enc, Wvo_enc, bi_dec, Wci_dec, Whi_dec,
     Wzi_dec, bf_dec, Wcf_dec, Whf_dec, Wzf_dec, Wzc_dec, Whc_dec, bc_dec, bo_dec,
-    Wco_dec, Who_dec, Wzo_dec, Wh_enc_mew, Www]
+    Wco_dec, Who_dec, Wzo_dec, Wh_enc_mew, Wh_enc_sig, Wh_dec_w]
    
 
     # learned parameters as shared
@@ -215,7 +216,7 @@ def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10, bat
     non_seq = [v, bi_enc, Wci_enc,  Whi_enc, Wvi_enc, bf_enc, Wcf_enc, Whf_enc, Wvc_enc, Wvf_enc,
     Whc_enc, bc_enc, bo_enc, Wco_enc, Who_enc, Wvo_enc, bi_dec, Wci_dec, Whi_dec,
     Wzi_dec, bf_dec, Wcf_dec, Whf_dec, Wzf_dec, Wzc_dec, Whc_dec, bc_dec, bo_dec,
-    Wco_dec, Who_dec, Wzo_dec, Wh_enc_mew, Www]
+    Wco_dec, Who_dec, Wzo_dec, Wh_enc_mew, Wh_enc_sig, Wh_dec_w]
 
 
     #z_t = T.vector('z_t')
@@ -225,7 +226,8 @@ def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10, bat
     # initial value for the RNN_dec hidden units
     h0_dec = T.zeros((batch_size, n_hidden_recurrent))
     c0_dec = T.zeros((batch_size ,n_hidden_recurrent))
-
+    mu_0 = T.zeros((batch_size, n_z))
+    sigma_0 = T.zeros((batch_size, n_z))
     w0 = T.zeros((batch_size, n_visible)) 
     prior_log_sigma = T.zeros((n_z,))
     prior_mu = T.zeros((n_z,))
@@ -234,7 +236,7 @@ def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10, bat
     # but with a separate Gibbs chain at each time step to sample (generate)
     # from the RNN-RBM. The resulting sample v_t is returned in order to be
     # passed down to the sequence history.
-    def recurrence( sample_t, h_tm1_enc, h_tm1_dec, c_tm1_enc, c_tm1_dec, w_tm1, v):
+    def recurrence( sample_t, h_tm1_enc, h_tm1_dec, c_tm1_enc, c_tm1_dec, w_tm1, mew_t, sigma_t, v):
         v_hat = v - T.nnet.sigmoid(w_tm1) #error input
         r_t = T.concatenate( [v , v_hat], axis = 1 ) 
         
@@ -250,7 +252,7 @@ def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10, bat
         
         # Get z_t
         mew_t = T.dot(h_t_enc, Wh_enc_mew )
-        sigma_t = mew_t
+        sigma_t = T.dot(h_t_enc, Wh_enc_sig )
         #sample =  theano_rng.normal(size=mew_t.shape, avg = 0, std = 1, dtype=theano.config.floatX)
         z_t = mew_t + (T.exp(sigma_t) * sample_t )
         # Generate h_t_dec = RNN_dec(h_tm1_dec, z_t) 
@@ -261,7 +263,7 @@ def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10, bat
         h_t_dec = o_t_dec * T.tanh( c_t_dec )
 
         # Get w_t
-        w_t = w_tm1 + T.dot(w_tm1, Www)
+        w_t = w_tm1 + T.dot(h_t_dec, Wh_dec_w)
         return [ h_t_enc, h_t_dec, c_t_enc, c_t_dec, w_t, mew_t, sigma_t]
 
 
@@ -278,7 +280,7 @@ def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10, bat
         h_t_dec = o_t_dec * T.tanh( c_t_dec )
 
         # Get w_t
-        w_t = w_tm1 + T.dot(w_tm1, Www)
+        w_t = w_tm1 + T.dot(h_t_dec, Wh_dec_w)
 
         return [ h_t_dec, c_t_dec, w_t ]
     
@@ -289,8 +291,8 @@ def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10, bat
 
   
     (h_t_enc, h_t_dec, c_t_enc, c_t_dec, w_t, mew_t, sigma_t ), updates_train = theano.scan(
-        lambda sample_t, h_tm1_enc, h_tm1_dec, c_tm1_enc, c_tm1_dec, w_tm1, v, *_: recurrence( sample_t, h_tm1_enc, h_tm1_dec, c_tm1_enc, c_tm1_dec, w_tm1, v),
-        sequences=[rand_samples], outputs_info=[h0_enc, h0_dec, c0_enc, c0_dec, w0, None, None], non_sequences=non_seq)
+        lambda sample_t, h_tm1_enc, h_tm1_dec, c_tm1_enc, c_tm1_dec, w_tm1, mew_t, sigma_t, v, *_: recurrence( sample_t, h_tm1_enc, h_tm1_dec, c_tm1_enc, c_tm1_dec, w_tm1, mew_t, sigma_t, v),
+        sequences=[rand_samples], outputs_info=[h0_enc, h0_dec, c0_enc, c0_dec, w0, mu_0, sigma_0], non_sequences=non_seq)
 
    
     L_z = (
@@ -313,10 +315,10 @@ def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10, bat
             )
         )
     '''
-    L_x = T.nnet.binary_crossentropy( T.nnet.sigmoid(w_t[-1,:,:]),  v)
+    L_x = T.nnet.binary_crossentropy(  T.nnet.sigmoid(w_t[-1,:,:]), v).sum( axis = 1)
 
     cost = (L_z + L_x).mean()
-    monitor = (L_z ).mean()
+    monitor = L_x.mean()
     # symbolic loop for sequence generation
     (h_t, c_t, w_t), updates_generate = theano.scan(
         lambda h_tm1, c_tm1, w_tm1, *_: generate(h_tm1, c_tm1, w_tm1),
@@ -362,11 +364,20 @@ class Rnn:
             )
 
 
-        gradient = T.grad(cost, params)        
-        updates_rmsprop = get_clip_rmsprop_updates(params, cost, gradient,  lr, momentum )
-        updates_train.update(updates_rmsprop)
-        
-        self.train_function = theano.function([v], monitor,
+        #gradient = T.grad(cost, params)        
+        #updates_rmsprop = get_clip_rmsprop_updates(params, cost, gradient,  lr, momentum )
+        #updates_train.update(updates_rmsprop)
+
+        gradient = T.grad(cost, params)
+        updates_train.update(
+            ((p, p - lr * g) for p, g in zip(params, gradient))
+        )
+
+        sum_squared_grad = shared_zeros(1)
+        for g in gradient:
+            sum_squared_grad = sum_squared_grad + T.sum(T.sqr(g))
+                    
+        self.train_function = theano.function([v], [monitor, sum_squared_grad],
                                                updates=updates_train)
 
         self.generate_function = theano.function(
@@ -386,7 +397,7 @@ class Rnn:
             Number of epochs (pass over the training set) performed. The user
             can safely interrupt training with Ctrl+C at any time.'''
 
-        f = gzip.open('data/mnist.pkl.gz' ,'rb')
+        f = gzip.open('../data/mnist.pkl.gz' ,'rb')
         train_set, valid_set, test_set = cPickle.load(f)
         f.close()
         train_set_x = train_set[0]
@@ -397,7 +408,8 @@ class Rnn:
 
                 for i in range(0, len(train_set_x), batch_size):
                     to_train = train_set_x[ i : i+ batch_size]
-                    cost = self.train_function( to_train )
+                    cost, gradient = self.train_function( to_train )
+                    print gradient
                     costs.append(cost)
 
                     print 'Epoch %i/%i batch_processed %i/%i' % (epoch + 1, num_epochs, i, len(train_set_x)),
@@ -417,7 +429,7 @@ class Rnn:
             cPickle.dump(g,f)
             f.close()
 
-def test_rnnrbm(batch_size=5000, num_epochs=200):
+def test_rnnrbm(batch_size=5000, num_epochs=4000):
     model = Rnn(batch_size = 5000)
     model.train(batch_size=batch_size, num_epochs=num_epochs)
     return model
