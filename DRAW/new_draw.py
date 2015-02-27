@@ -330,15 +330,21 @@ def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10, bat
 
 class Rnn:
     '''Simple class to train an DRAW.'''
-
+    ''' last known good configuration
+    n_z = 100
+    n_hidden_recurrent - 200,
+    T = 8,
+    lr = 0.01,
+    batch_size =1000
+    ''' 
     def __init__(
         self,
-        n_z = 50,
-        n_hidden_recurrent=100,
-        T_ = 6,
+        n_z = 100,
+        n_hidden_recurrent=200,
+        T_ = 8,
         lr=0.01,
         r=(1, 785),
-        batch_size = 100,
+        batch_size = 1000,
         momentum=0.99999
     ):
         '''Constructs and compiles Theano functions for training and sequence
@@ -386,7 +392,7 @@ class Rnn:
             updates=updates_generate
         )
 
-    def train(self,  batch_size=100, num_epochs=200):
+    def train(self,  batch_size=1000, num_epochs=4000):
         '''Train the RNN-RBM via stochastic gradient descent (SGD) using MIDI
         files converted to piano-rolls.
 
@@ -409,12 +415,12 @@ class Rnn:
                 for i in range(0, len(train_set_x), batch_size):
                     to_train = train_set_x[ i : i+ batch_size]
                     cost, gradient = self.train_function( to_train )
-                    print gradient
+                    #print gradient
                     costs.append(cost)
 
-                    print 'Epoch %i/%i batch_processed %i/%i' % (epoch + 1, num_epochs, i, len(train_set_x)),
-                    print numpy.mean(costs)
-                    sys.stdout.flush()
+                print 'Epoch %i/%i batch_processed %i/%i' % (epoch + 1, num_epochs, i, len(train_set_x)),
+                print numpy.mean(costs)
+                sys.stdout.flush()
 
 
         except KeyboardInterrupt:
@@ -429,8 +435,8 @@ class Rnn:
             cPickle.dump(g,f)
             f.close()
 
-def test_rnnrbm(batch_size=5000, num_epochs=4000):
-    model = Rnn(batch_size = 5000)
+def test_rnnrbm(batch_size=1000, num_epochs=4000):
+    model = Rnn(batch_size = batch_size)
     model.train(batch_size=batch_size, num_epochs=num_epochs)
     return model
 
@@ -439,3 +445,4 @@ if __name__ == '__main__':
     model.generate('sample1.mid')
     pylab.show()
  
+
