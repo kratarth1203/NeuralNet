@@ -489,7 +489,7 @@ class Rnn:
         self,
         n_z = 100,
         n_hidden_recurrent=256,
-        T_ = 32,
+        T_ = 8,
         lr=0.001,
         r=(1, 785),
         batch_size = 500,
