@@ -6,7 +6,10 @@
 import glob
 import os
 import sys
-
+import tables
+import tarfile
+import fnmatch
+import random
 import gzip
 import cPickle
 import numpy
@@ -29,7 +32,85 @@ theano.config.warn.subtensor_merge_bug = False
 
 from theano.compat.python2x import OrderedDict
 
-img_height, img_width = (28, 28)
+signal_width =  1000
+
+def load_fruitspeech(fruit_list = ['apple', 'pineapple']):
+    # Check if dataset is in the data directory.
+    data_path = os.path.join(os.path.split(__file__)[0], "data")
+    if not os.path.exists(data_path):
+        os.makedirs(data_path)
+
+    dataset = 'audio.tar.gz'
+    data_file = os.path.join(data_path, dataset)
+    if os.path.isfile(data_file):
+        dataset = data_file
+
+    if not os.path.isfile(data_file):
+        try:
+            import urllib
+            urllib.urlretrieve('http://google.com')
+            url = 'https://dl.dropboxusercontent.com/u/15378192/audio.tar.gz'
+        except AttributeError:
+            import urllib.request as urllib
+            url = 'https://dl.dropboxusercontent.com/u/15378192/audio.tar.gz'
+        print('Downloading data from %s' % url)
+        urllib.urlretrieve(url, data_file)
+
+    print('... loading data')
+    if not os.path.exists(os.path.join(data_path, "audio")):
+        tar = tarfile.open(data_file)
+        os.chdir(data_path)
+        tar.extractall()
+        tar.close()
+    
+    h5_file_path = os.path.join(data_path, "saved_fruit.h5")
+    if not os.path.exists(h5_file_path):
+        audio_matches = []
+        
+        data_path = os.path.join(data_path, "audio")
+        for root, dirnames, filenames in os.walk(data_path):
+            for fruit in fruit_list:
+                for filename in fnmatch.filter(filenames, fruit + '*.wav'):
+                    audio_matches.append(os.path.join(root, filename))
+
+        random.seed(1999)
+        random.shuffle(audio_matches)
+
+        # http://mail.scipy.org/pipermail/numpy-discussion/2011-March/055219.html
+        h5_file = tables.openFile(h5_file_path, mode='w')
+        data_x = h5_file.createVLArray(h5_file.root, 'data_x',
+                                       tables.Float32Atom(shape=()),
+                                       filters=tables.Filters(1))
+        data_y = h5_file.createVLArray(h5_file.root, 'data_y',
+                                       tables.Int32Atom(shape=()),
+                                       filters=tables.Filters(1))
+        for wav_path in audio_matches:
+            # Convert chars to int classes
+            word = wav_path.split(os.sep)[-1][:-6]
+            chars = [ord(c) - 97 for c in word]
+            data_y.append(np.array(chars, dtype='int32'))
+            fs, d = wavfile.read(wav_path)
+            # Preprocessing from A. Graves "Towards End-to-End Speech
+            # Recognition"
+            data_x.append(d.astype('float32'))
+        h5_file.close()
+
+    h5_file = tables.openFile(h5_file_path, mode='r')
+    data_x = h5_file.root.data_x
+    data_y = h5_file.root.data_y
+
+    # FIXME: HACKING
+    train_x = data_x
+    train_y = data_y
+    valid_x = data_x
+    valid_y = data_y
+    test_x = data_x
+    test_y = data_y
+    rval = [(train_x, train_y), (valid_x, valid_y), (test_x, test_y)]
+    return rval
+
+
+
 
 def batched_dot(A, B):
     """Batched version of dot-product.
@@ -47,7 +128,7 @@ def batched_dot(A, B):
     return C.sum(axis=-2)
 
 
-def filterbank_matrices(N,  center_y, center_x, delta, sigma):
+def filterbank_matrices(N,  center_x, delta, sigma):
     """Create a Fy and a Fx
         
     Parameters
@@ -65,21 +146,21 @@ def filterbank_matrices(N,  center_y, center_x, delta, sigma):
     tol = 1e-4
 
     muX = center_x.dimshuffle([0, 'x']) + delta.dimshuffle([0, 'x'])*(T.arange(N)-(N/2)-0.5)
-    muY = center_y.dimshuffle([0, 'x']) + delta.dimshuffle([0, 'x'])*(T.arange(N)-(N/2)-0.5)
+    #muY = center_y.dimshuffle([0, 'x']) + delta.dimshuffle([0, 'x'])*(T.arange(N)-(N/2)-0.5)
 
-    a = T.arange(img_width)
-    b = T.arange(img_height)
+    a = T.arange(signal_width)
+    #b = T.arange(img_height)
         
     FX = T.exp( -(a-muX.dimshuffle([0,1,'x']))**2 / (2. * sigma.dimshuffle([0,'x','x'])**2 ) + tol)
-    FY = T.exp( -(b-muY.dimshuffle([0,1,'x']))**2 / (2. * sigma.dimshuffle([0,'x','x'])**2 ) + tol)
+    #FY = T.exp( -(b-muY.dimshuffle([0,1,'x']))**2 / (2. * sigma.dimshuffle([0,'x','x'])**2 ) + tol)
     FX = FX / (FX.sum(axis=-1).dimshuffle(0, 1, 'x') + tol)
-    FY = FY / (FY.sum(axis=-1).dimshuffle(0, 1, 'x') + tol)
+    #FY = FY / (FY.sum(axis=-1).dimshuffle(0, 1, 'x') + tol)
 
-    return FY, FX
+    #return FY, FX
+    return FX
 
 
-
-def read(N,  images, center_y, center_x, delta, sigma):
+def read(N,  images, center_x, delta, sigma):
     """
     Parameters
     ----------
@@ -98,35 +179,34 @@ def read(N,  images, center_y, center_x, delta, sigma):
     batch_size = images.shape[0]
 
     # Reshape input into proper 2d images
-    I = images.reshape( (batch_size, img_height, img_width) )
+    #I = images.reshape( (batch_size, signal_width, 1) )
 
     # Get separable filterbank
-    FY, FX = filterbank_matrices(N, center_y, center_x, delta, sigma)
+    FX = filterbank_matrices(N, center_x, delta, sigma)
 
     # apply to the batch of images
-    W = batched_dot(batched_dot(FY, I), FX.transpose([0,2,1]))
+    W = batched_dot(FX, images.dimshuffle([0,1,'x']))
+    #W = batched_dot(FX, I)
 
-    return W.reshape((batch_size, N*N))
+    return W.reshape((batch_size, N))
 
 
 
 
-def write(N,  windows, center_y, center_x, delta, sigma):
+def write(N,  windows,  center_x, delta, sigma):
 
     batch_size = windows.shape[0]
     # Reshape input into proper 2d windows
-    W = windows.reshape( (batch_size, N, N) )
+    #W = windows.reshape( (batch_size, N, 1) )
 
     # Get separable filterbank
-    FY, FX = filterbank_matrices(N, center_y, center_x, delta, sigma)
+    FX = filterbank_matrices(N, center_x, delta, sigma)
 
     # apply...
-    I = batched_dot(batched_dot(FY.transpose([0,2,1]), W), FX)
+    I = batched_dot(FX.transpose([0,2,1]), windows.dimshuffle([0,1,'x']))
+    #I = batched_dot(FX.transpose([0,2,1]), W)
 
-    return I.reshape( (batch_size, img_height*img_width) )
-
-
-
+    return I.reshape( (batch_size, signal_width) )
 
 
 def nn2att( N, l ):
@@ -144,26 +224,25 @@ def nn2att( N, l ):
     sigma : vector (batch_size)
     gamma : vector (batch_size)
     """
-    center_y  = l[:,0]
-    center_x  = l[:,1]
-    log_delta = l[:,2]
-    log_sigma = l[:,3]
-    log_gamma = l[:,4]
+    center_x  = l[:,0]
+    log_delta = l[:,1]
+    log_sigma = l[:,2]
+    log_gamma = l[:,3]
     
     delta = T.exp(log_delta)
     sigma = T.exp(log_sigma/2.)
     gamma = T.exp(log_gamma).dimshuffle(0, 'x')
     
     # normalize coordinates
-    center_x = ((center_x+1.)/2.) * (img_width+1)
-    center_y = ((center_y+1.)/2.) * (img_height+1)
-    delta = ( (max(img_width, img_height)-1) / (N-1) ) * delta
+    center_x = ((center_x+1.)/2.) * (signal_width+1)
+    #center_y = ((center_y+1.)/2.) * (img_height+1)
+    delta = ( (signal_width-1) / (N-1) ) * delta
     
-    return center_y, center_x, delta, sigma, gamma
+    return center_x, delta, sigma, gamma
 
 
 def get_clip_rmsprop_updates(params, cost, gparams, 
-                                 learning_rate, momentum, rescale=1e2 ):
+                                 learning_rate, momentum, rescale=0.1 ):
 
     updates = OrderedDict()
 
@@ -255,7 +334,7 @@ def shared_zeros(*shape):
     return theano.shared(numpy.zeros(shape, dtype=theano.config.floatX))
 
 
-def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10, batch_size = 500, N_READ = 4, N_WRITE = 7):
+def build_rnn(n_visible = 1001, n_z = 100, n_hidden_recurrent = 256, T_ = 10, batch_size = 1000, N_READ = 12, N_WRITE = 21):
     '''Construct a symbolic RNN-RBM and initialize parameters.
 
     n_visible : integer
@@ -295,21 +374,21 @@ def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10, bat
     bi_enc = shared_zeros(n_hidden_recurrent)
     Wci_enc = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001, 'Wci_enc')
     Whi_enc = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001, 'Whi_enc')
-    Wvi_enc = shared_normal((2*N_READ*N_READ) + n_hidden_recurrent, n_hidden_recurrent, 0.0001, 'Wvi_enc')
+    Wvi_enc = shared_normal((2*N_READ) + n_hidden_recurrent, n_hidden_recurrent, 0.0001, 'Wvi_enc')
 
     bf_enc = shared_zeros(n_hidden_recurrent)
     Wcf_enc = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001, 'Wcf_enc')
     Whf_enc = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001, 'Whf_enc')
-    Wvf_enc = shared_normal((2*N_READ*N_READ) + n_hidden_recurrent, n_hidden_recurrent, 0.0001, 'Wvf_enc')
+    Wvf_enc = shared_normal((2*N_READ) + n_hidden_recurrent, n_hidden_recurrent, 0.0001, 'Wvf_enc')
     
-    Wvc_enc = shared_normal((2*N_READ*N_READ) + n_hidden_recurrent, n_hidden_recurrent, 0.0001, 'Wvc_enc') 
+    Wvc_enc = shared_normal((2*N_READ) + n_hidden_recurrent, n_hidden_recurrent, 0.0001, 'Wvc_enc') 
     Whc_enc = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001, 'Whc_enc')
     bc_enc = shared_zeros(n_hidden_recurrent)
     
     bo_enc = shared_zeros(n_hidden_recurrent)
     Wco_enc = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001, 'Wco_enc') 
     Who_enc = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001, 'Who_enc')
-    Wvo_enc = shared_normal((2*N_READ*N_READ) + n_hidden_recurrent, n_hidden_recurrent, 0.0001, 'Wvo_enc')
+    Wvo_enc = shared_normal((2*N_READ) + n_hidden_recurrent, n_hidden_recurrent, 0.0001, 'Wvo_enc')
 
     bi_dec = shared_zeros(n_hidden_recurrent)
     Wci_dec = shared_normal(n_hidden_recurrent, n_hidden_recurrent, 0.0001, 'Wci_dec')
@@ -334,9 +413,9 @@ def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10, bat
     Wh_enc_sig = shared_normal(n_hidden_recurrent, n_z, 0.0001, 'Wh_enc_sig') 
 
     
-    Wh_dec_read = shared_normal(n_hidden_recurrent, 5, 0.0001, 'Wh_dec_read') 
-    Wh_dec_write = shared_normal(n_hidden_recurrent, 5, 0.0001, 'Wh_dec_write') 
-    Wh_dec_w = shared_normal(n_hidden_recurrent, N_WRITE*N_WRITE, 0.0001, 'Wh_dec_w') 
+    Wh_dec_read = shared_normal(n_hidden_recurrent, 4, 0.0001, 'Wh_dec_read') 
+    Wh_dec_write = shared_normal(n_hidden_recurrent, 4, 0.0001, 'Wh_dec_write') 
+    Wh_dec_w = shared_normal(n_hidden_recurrent, N_WRITE, 0.0001, 'Wh_dec_w') 
 
 
     params = [bi_enc, Wci_enc,  Whi_enc, Wvi_enc, bf_enc, Wcf_enc, Whf_enc, Wvc_enc, Wvf_enc,
@@ -377,9 +456,9 @@ def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10, bat
         
         v_hat = v - T.nnet.sigmoid(w_tm1) #error input
         att_l_r = T.dot( h_tm1_dec, Wh_dec_read) 
-        center_y, center_x, delta, sigma, gamma = nn2att(N_READ, att_l_r)        
-        w = gamma * read(N_READ, v , center_y, center_x, delta, sigma)
-        w_hat = gamma * read(N_READ, v_hat , center_y, center_x, delta, sigma)
+        center_x, delta, sigma, gamma = nn2att(N_READ, att_l_r)        
+        w = gamma * read(N_READ, v ,  center_x, delta, sigma)
+        w_hat = gamma * read(N_READ, v_hat , center_x, delta, sigma)
         
         # v_enc = [r_t, h_tm1_dec]
         r_t = T.concatenate([w, w_hat], axis = 1)
@@ -405,11 +484,11 @@ def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10, bat
         h_t_dec = o_t_dec * T.tanh( c_t_dec )
         
         att_l_w = T.dot( h_t_dec, Wh_dec_write) 
-        center_y, center_x, delta, sigma, gamma = nn2att(N_WRITE,att_l_w)        
+        center_x, delta, sigma, gamma = nn2att(N_WRITE,att_l_w)        
         
         # Get w_t
         m_t = T.dot(h_t_dec, Wh_dec_w)
-        m_update = write(N_WRITE, m_t, center_y, center_x, delta, sigma)
+        m_update = write(N_WRITE, m_t,  center_x, delta, sigma)
         w_t = w_tm1 + ( (1./(gamma + 1e-4)) * m_update)
         return [ h_t_enc, h_t_dec, c_t_enc, c_t_dec, w_t, mew_t, sigma_t]
 
@@ -428,13 +507,13 @@ def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10, bat
 
         # Get w_t
         att_l_w = T.dot( h_t_dec, Wh_dec_write) 
-        center_y, center_x, delta, sigma, gamma = nn2att(N_WRITE,att_l_w)        
+        center_x, delta, sigma, gamma = nn2att(N_WRITE,att_l_w)        
         
         # Get w_t
         m_t = T.dot(h_t_dec, Wh_dec_w)
-        m_update = write(N_WRITE, m_t, center_y, center_x, delta, sigma)
+        m_update = write(N_WRITE, m_t, center_x, delta, sigma)
         w_t = w_tm1 + ( (1./(gamma + 1e-4)) * m_update)
-
+        
         return [ h_t_dec, c_t_dec, w_t ]
     
     # For training, the deterministic recurrence is used to compute all the
@@ -469,8 +548,8 @@ def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10, bat
         )
     '''
     #L_x = T.nnet.binary_crossentropy(  T.nnet.sigmoid(w_t[-1,:,:]), v).sum( axis = 1)
-    L_x = (-(T.xlogx.xlogy0(v, T.nnet.sigmoid(w_t[-1,:,:]) + 1e-4) + T.xlogx.xlogy0(1 - v, 1 - T.nnet.sigmoid(w_t[-1,:,:]) + 1e-4 ))).sum(axis = 1)
-    #L_x =   (  (T.nnet.sigmoid(w_t[-1,:,:]) - v ) ** 2 ).sum(axis = 1)
+    #L_x = (-(T.xlogx.xlogy0(v, T.nnet.sigmoid(w_t[-1,:,:]) + 1e-4) + T.xlogx.xlogy0(1 - v, 1 - T.nnet.sigmoid(w_t[-1,:,:]) + 1e-4 ))).sum(axis = 1)
+    L_x =   (  (T.nnet.sigmoid(w_t[-1,:,:] + 1e-4) - v ) ** 2 ).sum(axis = 1)
     cost = (L_z + L_x).mean()
     monitor = L_x.mean()
     # symbolic loop for sequence generation
@@ -485,21 +564,25 @@ def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10, bat
 class Rnn:
     '''Simple class to train an DRAW.'''
     ''' last known good configuration
-    n_z = 100
-    n_hidden_recurrent - 200,
-    T = 8,
-    lr = 0.01,
-    batch_size =1000
+        n_z = 200,
+        n_hidden_recurrent=1000,
+        T_ = 20,
+        lr=0.002,
+        r=(1, 4901),
+        batch_size = 5,
+        momentum=0.9999
+        N_READ = 12
+        N_WRITE = 21
     ''' 
     def __init__(
         self,
         n_z = 100,
         n_hidden_recurrent=256,
-        T_ = 8,
-        lr=0.001,
-        r=(1, 785),
-        batch_size = 500,
-        momentum=0.999
+        T_ = 10,
+        lr=0.01,
+        r=(1, 1001),
+        batch_size = 1000,
+        momentum=0.9999
     ):
         '''Constructs and compiles Theano functions for training and sequence
         generation.
@@ -547,7 +630,7 @@ class Rnn:
             updates=updates_generate
         )
 
-    def train(self,  batch_size=500, num_epochs=4000):
+    def train(self,  batch_size=1000, num_epochs=4000):
         '''Train the RNN-RBM via stochastic gradient descent (SGD) using MIDI
         files converted to piano-rolls.
 
@@ -564,11 +647,55 @@ class Rnn:
         #train_set_x = train_set[0]
         #test_set_x = test_set[0]
 
-        train_set_x = numpy.load('binarized_mnist_train.npy')
-        train_set_x = numpy.array(train_set_x, dtype=numpy.float32)
-        test_set_x = numpy.load('binarized_mnist_test.npy')
-        test_set_x = numpy.array(test_set_x, dtype=numpy.float32)
+        #train_set_x = numpy.load('binarized_mnist_train.npy')
+        #train_set_x = numpy.array(train_set_x, dtype=numpy.float32)
+        #test_set_x = numpy.load('binarized_mnist_test.npy')
+        #test_set_x = numpy.array(test_set_x, dtype=numpy.float32)
+        '''
+        train, valid, test = load_fruitspeech(['peach'])
+        train_x, train_y = train
+        valid_x, valid_y = valid
+        test_x, test_y = test
+        #new_x = []
+        #for item in train_x:
+        #    new_x.append(item)
+        #train_x = numpy.array(new_x, dtype=theano.config.floatX)
+        #print train_x
+        # load into main memory and normalize between -1 and 1
+        #train_x = [x[:4923]  for x in train_x[:]]
+        train_x = train_x[:]
+        new_x = []
+        for i in range(15):
+            new_x.append(train_x[i][:4900])
+        train_x = new_x
+        a= []
+        b =[]
+        for item in train_x:
+            a.append(max(item))
+            b.append(min(item))
+        max_ = max(a)
+        min_ = min(b)
+        print 'max = ' , max_
+        print 'min =' , min_
+        train_set_x = (train_x + numpy.abs(min_)) / ( max_ + numpy.abs(min_) )
+        test_set_x = train_set_x[10:15]
+        train_set_x = train_set_x[0:10]
+        
+        print train_set_x
+        print len(train_set_x)
+        print len(train_set_x[0])
+        '''
 
+
+        train_set_x = numpy.load('/data/lisatmp3/mehris/TIMIT_AA/train_aa_1000_X_01standardized.npy')
+        test_set_x = train_set_x[10000:12000]
+        train_set_x = train_set_x[0:10000]
+
+
+        test_set_x = numpy.array(test_set_x, dtype=numpy.float32)
+        train_set_x = numpy.array(train_set_x, dtype=numpy.float32)
+
+         
         try:
             for epoch in xrange(num_epochs):
                 numpy.random.shuffle(train_set_x)
@@ -605,7 +732,7 @@ class Rnn:
             cPickle.dump(g,f)
             f.close()
 
-def test_rnnrbm(batch_size=500, num_epochs=4000):
+def test_rnnrbm(batch_size=1000, num_epochs=4000):
     model = Rnn(batch_size = batch_size)
     model.train(batch_size=batch_size, num_epochs=num_epochs)
     return model
