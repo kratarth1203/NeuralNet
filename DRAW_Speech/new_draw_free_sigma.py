@@ -502,8 +502,8 @@ class Rnn:
         self,
         n_z = 500,
         n_hidden_recurrent=1200,
-        T_ = 8,
-        lr=0.05,
+        T_ = 5,
+        lr=0.01,
         r=(1, 5861), 
         batch_size = 500,
         momentum=0.99999
