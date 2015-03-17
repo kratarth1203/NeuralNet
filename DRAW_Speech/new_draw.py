@@ -51,7 +51,98 @@ numpy.random.seed(0xbeef)
 theano_rng = RandomStreams(seed=numpy.random.randint(1 << 30))
 theano.config.warn.subtensor_merge_bug = False
 
+from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
+import copy
+import time
+floatX='float32'
+
 from theano.compat.python2x import OrderedDict
+# some utilities
+def constantX(value, float_dtype='float32'):
+    return theano.tensor.constant(numpy.asarray(value, dtype=float_dtype))
+
+def sharedX(value):
+    return theano.shared(value)
+
+def build_updates(
+        cost, params, 
+        clip_c=0,clip_idx=None,
+        shrink_grad=None, choice=None):
+    updates = OrderedDict()
+    grads = T.grad(cost, params)
+    def apply_clip(g):
+        g2 = 0.
+        g2 += (g**2).sum()
+        new_grad = T.switch(g2 > (clip_c**2), 
+                        g / T.sqrt(g2) * clip_c,
+                        g)
+        return new_grad
+    if clip_c > 0. and clip_idx is not None:
+        for idx in clip_idx:
+            grads[idx] = apply_clip(grads[idx])
+    if shrink_grad is not None:
+        for idx in shrink_grad:
+            grads[idx] *= 0.001
+    def get_updates_adadelta(grads,params,decay=0.95):
+        decay = constantX(decay)
+        print 'build updates with adadelta'
+        for param, grad in zip(params, grads):
+            # mean_squared_grad := E[g^2]_{t-1}
+            mean_square_grad = sharedX(numpy.zeros(param.get_value().shape, dtype=floatX))
+            # mean_square_dx := E[(\Delta x)^2]_{t-1}
+            mean_square_dx = sharedX(numpy.zeros(param.get_value().shape, dtype=floatX))
+            if param.name is not None:
+                mean_square_grad.name = 'mean_square_grad_' + param.name
+                mean_square_dx.name = 'mean_square_dx_' + param.name
+
+            # Accumulate gradient
+            new_mean_squared_grad = \
+                    decay * mean_square_grad +\
+                    (1. - decay) * T.sqr(grad)
+            # Compute update
+            epsilon = constantX(1e-7)
+            rms_dx_tm1 = T.sqrt(mean_square_dx + epsilon)
+            rms_grad_t = T.sqrt(new_mean_squared_grad + epsilon)
+            delta_x_t = - rms_dx_tm1 / rms_grad_t * grad
+
+            # Accumulate updates
+            new_mean_square_dx = \
+                    decay * mean_square_dx + \
+                    (1. - decay) * T.sqr(delta_x_t)
+
+            # Apply update
+            updates[mean_square_grad] = new_mean_squared_grad
+            updates[mean_square_dx] = new_mean_square_dx
+            updates[param] = param + delta_x_t
+    def get_updates_grads_momentum(gparams, params, lr=0.1, momentum=0.5):
+        print 'building updates with momentum'
+        # build momentum
+        gparams_mom = []
+        for param in params:
+            gparam_mom = theano.shared(
+                numpy.zeros(param.get_value(borrow=True).shape,
+                dtype=floatX))
+            gparams_mom.append(gparam_mom)
+
+        for gparam, gparam_mom, param in zip(gparams, gparams_mom, params):
+            inc = momentum * gparam_mom - (constantX(1) - momentum) * lr * gparam
+            updates[gparam_mom] = inc
+            updates[param] = param + inc
+    def get_updates_rmsprop(grads, params, lr=0.1, decay=0.95):
+        for param,grad in zip(params,grads):
+            mean_square_grad = sharedX(numpy.zeros(param.get_value().shape, dtype=floatX))
+            new_mean_squared_grad = (decay * mean_square_grad +
+                                     (1. - decay) * T.sqr(grad))
+            rms_grad_t = T.sqrt(new_mean_squared_grad)
+            delta_x_t = constantX(-1) * lr * grad / rms_grad_t
+            updates[mean_square_grad] = new_mean_squared_grad
+            updates[param] = param + delta_x_t
+    get_updates_adadelta(grads, params)
+    #get_updates_grads_momentum(grads, params)
+    #get_updates_rmsprop(grads, params)
+    return updates
+
+
 
 def get_clip_rmsprop_updates(params, cost, gparams, 
                                  learning_rate, momentum, rescale=5. ):
@@ -165,7 +256,7 @@ def load_fruitspeech(fruit_list = ['apple', 'pineapple']):
         tar.extractall()
         tar.close()
     
-    h5_file_path = os.path.join(data_path, "saved_fruit.h5")
+    h5_file_path = os.path.join(data_path, "saved_all_fruit.h5")
     if not os.path.exists(h5_file_path):
         audio_matches = []
         
@@ -445,8 +536,8 @@ class Rnn:
         n_hidden_recurrent=1200,
         T_ = 15,
         lr=0.01,
-        r=(1, 4923), 
-        batch_size = 5,
+        r=(1, 2695), 
+        batch_size = 105,
         momentum=0.99999
     ):
         #r = (1,2881) for apple[0]
@@ -477,16 +568,18 @@ class Rnn:
         #updates_rmsprop = get_clip_rmsprop_updates(params, cost, gradient,  lr, momentum )
         #updates_train.update(updates_rmsprop)
 
-        gradient = T.grad(cost, params)
-        updates_train.update(
-            ((p, p - lr * g) for p, g in zip(params, gradient))
-        )
+        #gradient = T.grad(cost, params)
+        #updates_train.update(
+        #    ((p, p - lr * g) for p, g in zip(params, gradient))
+        #)
 
-        sum_squared_grad = shared_zeros(1)
-        for g in gradient:
-            sum_squared_grad = sum_squared_grad + T.sum(T.sqr(g))
+        #sum_squared_grad = shared_zeros(1)
+        #for g in gradient:
+        #    sum_squared_grad = sum_squared_grad + T.sum(T.sqr(g))
                     
-        self.train_function = theano.function([v], [monitor, sum_squared_grad],
+        updates_new = build_updates(cost, params)
+        updates_train.update(updates_new)
+        self.train_function = theano.function([v], [monitor],
                                                updates=updates_train)
         
         self.test_function = theano.function( [v], monitor )
@@ -496,7 +589,7 @@ class Rnn:
             updates=updates_generate
         )
 
-    def train(self,  batch_size=5, num_epochs=4000):
+    def train(self,  batch_size=105, num_epochs=4000):
         '''Train the RNN-RBM via stochastic gradient descent (SGD) using MIDI
         files converted to piano-rolls.
 
@@ -515,8 +608,46 @@ class Rnn:
 
         #train_set_x = numpy.load('binarized_mnist_train.npy')
         #test_set_x = numpy.load('binarized_mnist_test.npy')
-
+        
+        '''
         train, valid, test = load_fruitspeech(['peach'])
+        train_x, train_y = train
+        valid_x, valid_y = valid
+        test_x, test_y = test
+        train_x = train_x[:]
+        new_x = []
+        a = []
+        for i in range(15):
+            a.append(train_x[i].shape[0])
+        idx = numpy.max(a)
+        print idx
+        for item in train_x:
+            if item.shape[0] < idx:
+                #item = numpy.append(item, [0 for i in range(idx - item.shape[0])])
+                item = numpy.append(item,  item[0:idx-item.shape[0]]  )
+                new_x.append(item)
+            else:
+                new_x.append(item)
+        #print numpy.min(a)
+        #print numpy.max(a)
+        train_x = new_x
+        a= []
+        b =[]
+        for item in train_x:
+            a.append(max(item))
+            b.append(min(item))
+        max_ = max(a)
+        min_ = min(b)
+        print 'max = ' , max_
+        print 'min =' , min_
+        train_x = (train_x + numpy.abs(min_)) / ( max_ + numpy.abs(min_) )
+        print train_x
+        print train_x.shape
+        '''
+
+
+        
+        train, valid, test = load_fruitspeech(['pineapple'])
         train_x, train_y = train
         valid_x, valid_y = valid
         test_x, test_y = test
@@ -528,9 +659,13 @@ class Rnn:
         # load into main memory and normalize between -1 and 1
         #train_x = [x[:4923]  for x in train_x[:]]
         train_x = train_x[:]
+        a = []
+        for item in train_x:
+            a.append(item.shape[0])
+        print numpy.min(a)
         new_x = []
-        for i in range(15):
-            new_x.append(train_x[9])
+        for i in range(105):
+            new_x.append(train_x[i][:2694])
         train_x = new_x
         a= []
         b =[]
@@ -545,6 +680,7 @@ class Rnn:
         print train_x
         print len(train_x)
         print len(train_x[0])
+
         try:
             for epoch in xrange(num_epochs):
                 numpy.random.shuffle(train_x)
@@ -553,7 +689,7 @@ class Rnn:
 
                 for i in range(0, len(train_x), batch_size):
                     to_train = train_x[ i : i+ batch_size]
-                    cost, gradient = self.train_function( to_train )
+                    cost = self.train_function( to_train )
                     #print gradient
                     costs.append(cost)
                 #if epoch%10 == 0:
@@ -574,14 +710,14 @@ class Rnn:
 
     def generate(self, filename, show=True):
 
-        n_samples_to_gen = 5
+        n_samples_to_gen = 100
         for i in range(n_samples_to_gen):
             g = self.generate_function()
-            f = open('sample_rnn_%i.pkl' % i, 'w')
+            f = open('sample_rnn_fruits_%i.pkl' % i, 'w')
             cPickle.dump(g,f)
             f.close()
 
-def test_rnnrbm(batch_size=5, num_epochs=4000):
+def test_rnnrbm(batch_size=105, num_epochs=4000):
     model = Rnn(batch_size = batch_size)
     model.train(batch_size=batch_size, num_epochs=num_epochs)
     return model
@@ -591,4 +727,5 @@ if __name__ == '__main__':
     model.generate('sample1.mid')
     pylab.show()
  
+
 
