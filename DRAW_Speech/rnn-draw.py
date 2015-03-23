@@ -279,13 +279,13 @@ def KLGaussianGaussian(mu1, logvar1, mu2, logvar2, tol=0.):
     mu2     : FullyConnected (Linear)
     logvar2 : FullyConnected (Linear)
     """
-    logvar1 = T.log(T.exp(logvar1) + tol)
-    logvar2 = T.log(T.exp(logvar2) + tol)
+    #logvar1 = T.log(T.exp(logvar1) + tol)
+    #logvar2 = T.log(T.exp(logvar2) + tol)
     kl = 0.5 * (logvar2 - logvar1 + (T.exp(logvar1) + (mu1 - mu2)**2) /
                 T.exp(logvar2) - 1)
     return kl
 
-def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10, batch_size = 5, sigma_b = 1e-3):
+def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200,  T_ = 10, batch_size = 5, sigma_b = 1e-3):
     '''Construct a symbolic RNN-RBM and initialize parameters.
 
     n_visible : integer
@@ -382,8 +382,14 @@ def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10, bat
     Wh_enc_mu_z = shared_normal(n_hidden_recurrent, n_z, 0.0001, 'Wh_enc_mew') 
     Wh_enc_sig_z = shared_normal(n_hidden_recurrent, n_z, 0.0001, 'Wh_enc_sig') 
 
+    Wh_prior_mu = shared_normal(n_hidden_recurrent, n_z, 0.0001, 'Wh_enc_mew') 
+    Wh_prior_sig = shared_normal(n_hidden_recurrent, n_z, 0.0001, 'Wh_enc_sig') 
+    
     b_mu_z = shared_zeros(n_z)
     b_sig_z = shared_zeros(n_z)
+    
+    b_mu_prior = shared_zeros(n_z)
+    b_sig_prior = shared_zeros(n_z)
     
     Wh_dec_mu_x = shared_normal(n_hidden_recurrent, n_visible, 0.0001, 'Wh_dec_mu_x') 
     Wh_dec_sig_x = shared_normal(n_hidden_recurrent, n_visible, 0.0001, 'Wh_dec_sigma_x') 
@@ -396,19 +402,24 @@ def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10, bat
     Whc_enc, bc_enc, bo_enc, Wco_enc, Who_enc, Wvo_enc, bi_dec, Wci_dec, Whi_dec,
     Wzi_dec, bf_dec, Wcf_dec, Whf_dec, Wzf_dec, Wzc_dec, Whc_dec, bc_dec, bo_dec,
     Wco_dec, Who_dec, Wzo_dec, Wh_enc_mu_z,  Wh_enc_sig_z, Wh_dec_mu_x, Wh_dec_sig_x, b_mu_z, b_sig_z, b_mu_x, b_sig_x,
-     bi_prior, Wci_prior,  Whi_prior, Wvi_prior, bf_prior, Wcf_prior, Whf_prior, Wvc_prior, Wvf_prior,
-    Whc_prior, bc_prior, bo_prior, Wco_prior, Who_prior, Wvo_prior]
+    bi_prior, Wci_prior,  Whi_prior, Wvi_prior, bf_prior, Wcf_prior, Whf_prior, Wvc_prior, Wvf_prior,
+    Whc_prior, bc_prior, bo_prior, Wco_prior, Who_prior, Wvo_prior, Wh_prior_mu, Wh_prior_sig, b_mu_prior, b_sig_prior]
     # learned parameters as shared
     # variables
 
     #v = T.matrix()  # a training sequencei
-    v = T.tensor3('v')
+    v = T.matrix('v')
+    v = v.reshape((v.shape[0], v.shape[1] / n_visible, -1))
+    v = v.dimshuffle(2,0,1)
 
-
+    rand_samples_z =  theano_rng.normal(size=(T_, n_z*batch_size), avg = 0, std = 1, dtype=theano.config.floatX)
+    rand_samples_x =  theano_rng.normal(size=(T_,n_visible*batch_size), avg = 0, std = 1, dtype=theano.config.floatX)
     #z_t = T.vector('z_t')
     # initial value for the RNN_enc hidden units
     h0_enc = T.zeros((batch_size , n_hidden_recurrent))
     c0_enc = T.zeros((batch_size , n_hidden_recurrent))
+    h0_prior = T.zeros((batch_size , n_hidden_recurrent))
+    c0_prior = T.zeros((batch_size , n_hidden_recurrent))
     # initial value for the RNN_dec hidden units
     h0_dec = T.zeros((batch_size, n_hidden_recurrent))
     c0_dec = T.zeros((batch_size ,n_hidden_recurrent))
@@ -479,13 +490,9 @@ def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10, bat
             return [ h_t_enc, h_t_dec, c_t_enc, c_t_dec,  mu_z_t, sigma_z_t,  mu_x_t, sigma_x_t]
 
 
-   
-
         # For training, the deterministic recurrence is used to compute all the
         # {bv_t, bh_t, 1 <= t <= T} given v. Conditional RBMs can then be trained
         # in batches using those parameters.
-        rand_samples_z =  theano_rng.normal(size=(T_, n_z*batch_size), avg = 0, std = 1, dtype=theano.config.floatX)
-        rand_samples_x =  theano_rng.normal(size=(T_,n_visible*batch_size), avg = 0, std = 1, dtype=theano.config.floatX)
   
         (h_t_enc, h_t_dec, c_t_enc, c_t_dec,  mu_z_t, sigma_z_t, mu_x_t , sigma_x_t ), _ = theano.scan(
             lambda sample_z_t, sample_x_t, h_tm1_enc, h_tm1_dec, c_tm1_enc, c_tm1_dec, mu_z_t,sigma_z_t, mu_x_tm1, sigma_x_tm1,  v_prior, *_: recurrence( sample_z_t, sample_x_t, h_tm1_enc, h_tm1_dec, c_tm1_enc, c_tm1_dec,  mu_z_t, sigma_z_t, mu_x_tm1, sigma_x_tm1,  v_prior),
@@ -502,74 +509,76 @@ def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10, bat
         lambda v_t, h_tm1_prior, c_tm1_prior, *_: prior_recurrence( v_t,  h_tm1_prior,c_tm1_prior),
         sequences=[v], outputs_info=[h0_prior, c0_prior,None, None, None, None, None, None], non_sequences=full_params)
 
+    def prior_generate(h_tm1_prior, c_tm1_prior, mu_x_t, sigma_x_t):
+        
+        rand_samples_x =  theano_rng.normal(size=(batch_size,n_visible), avg = 0, std = 1, dtype=theano.config.floatX)
+        v_prior = mu_x_t + (sigma_x_t * rand_samples_x)
+        i_t_prior = T.nnet.sigmoid(bi_prior + T.dot(c_tm1_prior, Wci_prior) + T.dot(h_tm1_prior, Whi_prior) + T.dot(v_prior, Wvi_prior))
+        f_t_prior = T.nnet.sigmoid(bf_prior + T.dot(c_tm1_prior, Wcf_prior) + T.dot(h_tm1_prior, Whf_prior) + T.dot(v_prior, Wvf_prior))
+        c_t_prior = (f_t_prior * c_tm1_prior) + ( i_t_prior * T.tanh( T.dot(v_prior, Wvc_prior) + T.dot( h_tm1_prior, Whc_prior) + bc_prior ))
+        o_t_prior = T.nnet.sigmoid(bo_prior + T.dot(c_t_prior, Wco_prior) + T.dot(h_tm1_prior, Who_prior) + T.dot(v_prior, Wvo_prior))
+        h_t_prior = o_t_prior * T.tanh( c_t_prior )
+        
+        mu_prior_w = T.dot(h_t_prior, Wh_prior_mu) + b_mu_prior
+        sigma_prior_w = sigma_b + T.nnet.softplus(T.dot(h_t_prior, Wh_prior_sig) + b_sig_prior)
+        
+        rand_samples_z =  theano_rng.normal(size=(batch_size,n_z), avg = 0, std = 1, dtype=theano.config.floatX)
+        z_t = mu_prior_w + (sigma_prior_w * rand_samples_z)
+        def generate( h_tm1_dec, c_tm1_dec, mu_x_tm1 , sigma_x_tm1 ):
 
-    def generate( h_tm1_dec, c_tm1_dec, mu_x_tm1 , sigma_x_tm1 ):
+            #mew_t = T.dot(h_tm1_dec, Wh_enc_mew )
+            #z_t = theano_rng.normal(size=(n_z,), avg = 0, std = 1, dtype=theano.config.floatX)
 
-       #mew_t = T.dot(h_tm1_dec, Wh_enc_mew )
-       z_t = theano_rng.normal(size=(n_z,), avg = 0, std = 1, dtype=theano.config.floatX)
+            # Generate h_t_dec = RNN_dec(h_tm1_dec, z_t) 
+            i_t_dec = T.nnet.sigmoid(bi_dec + T.dot(c_tm1_dec, Wci_dec) + T.dot(h_tm1_dec, Whi_dec) + T.dot(z_t, Wzi_dec))
+            f_t_dec = T.nnet.sigmoid(bf_dec + T.dot(c_tm1_dec, Wcf_dec) + T.dot(h_tm1_dec, Whf_dec) + T.dot(z_t , Wzf_dec))
+            c_t_dec = (f_t_dec * c_tm1_dec) + ( i_t_dec * T.tanh( T.dot(z_t, Wzc_dec) + T.dot( h_tm1_dec, Whc_dec) + bc_dec ))
+            o_t_dec = T.nnet.sigmoid(bo_dec + T.dot(c_t_dec, Wco_dec) + T.dot(h_tm1_dec, Who_dec) + T.dot(z_t, Wzo_dec))
+            h_t_dec = o_t_dec * T.tanh( c_t_dec )
 
-       # Generate h_t_dec = RNN_dec(h_tm1_dec, z_t) 
-       i_t_dec = T.nnet.sigmoid(bi_dec + T.dot(c_tm1_dec, Wci_dec) + T.dot(h_tm1_dec, Whi_dec) + T.dot(z_t, Wzi_dec))
-       f_t_dec = T.nnet.sigmoid(bf_dec + T.dot(c_tm1_dec, Wcf_dec) + T.dot(h_tm1_dec, Whf_dec) + T.dot(z_t , Wzf_dec))
-       c_t_dec = (f_t_dec * c_tm1_dec) + ( i_t_dec * T.tanh( T.dot(z_t, Wzc_dec) + T.dot( h_tm1_dec, Whc_dec) + bc_dec ))
-       o_t_dec = T.nnet.sigmoid(bo_dec + T.dot(c_t_dec, Wco_dec) + T.dot(h_tm1_dec, Who_dec) + T.dot(z_t, Wzo_dec))
-       h_t_dec = o_t_dec * T.tanh( c_t_dec )
+            # Get w_t
+            mu_x_t = mu_x_tm1 + T.dot(h_t_dec, Wh_dec_mu_x) + b_mu_x
+            sigma_x_t = sigma_b +  T.nnet.softplus(T.dot(h_t_dec, Wh_dec_sig_x) + b_sig_x)
+            #sigma_x_t =  b_sig_x
 
-       # Get w_t
-       mu_x_t = mu_x_tm1 + T.dot(h_t_dec, Wh_dec_mu_x) + b_mu_x
-       sigma_x_t = sigma_b +  T.nnet.softplus(T.dot(h_t_dec, Wh_dec_sig_x) + b_sig_x)
-       #sigma_x_t =  b_sig_x
-
-       return [ h_t_dec, c_t_dec, mu_x_t , sigma_x_t]
+            return [ h_t_dec, c_t_dec, mu_x_t , sigma_x_t]
    
-    #L_z = (
-    #    - T.log(sigma_z_t)
-    #    + 0.5 * (
-    #    T.sqr(sigma_z_t) + (mu_z_t) ** 2
-    #    )
-    #    - 0.5
-    #    ).sum(axis=-1).sum(axis = 0)
+        # symbolic loop for sequence generation
+        (hg_1, cg_1, g_mu_x_t, g_sigma_x_t ), updates_generate = theano.scan(
+            lambda h_tm1, c_tm1, mu_x_tm1, sigma_x_tm1,  *_: generate(h_tm1, c_tm1, mu_x_tm1, sigma_x_tm1 ),
+            outputs_info=[ h0_dec, c0_dec, mu_x_0, sigma_x_0 ], non_sequences=full_params, n_steps=30)
+
+        return h_t_prior, c_t_prior, g_mu_x_t[-1,:,:], g_sigma_x_t[-1,:,:]
+
+    (h_t_prior, c_t_prior, g_mu_x_t, g_sigma_x_t ), updates_generate = theano.scan(
+        lambda h_tm1, c_tm1, mu_x_tm1, sigma_x_tm1,  *_: prior_generate(h_tm1, c_tm1, mu_x_tm1, sigma_x_tm1 ),
+        outputs_info=[ h0_prior, c0_prior, mu_x_0, sigma_x_0 ], non_sequences=full_params, n_steps=10)
+
     L_z = T.sum(
               T.sum( 
-              T.sum(KLGaussianGaussian(mu_prior.dimshuffle(0,'x',1,2) ,
-                                       sigma_prior.dimshuffle(0,'x',1,2) ,
+              T.sum(KLGaussianGaussian(mu_prior_w.dimshuffle(0,'x',1,2) ,
+                                       2*T.log(sigma_prior_w.dimshuffle(0,'x',1,2)) ,
                                        mu_z_t,
-                                       sigma_z_t),
+                                       2*T.log(sigma_z_t)),
               axis= 3),
               axis =1),
            axis = 0)
-    #L_z = -(T.mean( 0.5 * ( (mew_t ** 2).sum() + (sigma_t ** 2).sum() - ( T.log(sigma_t ** 2) ).sum() ) ) - ( T_ / 2 ))
-
-    #TODO
-    #L_x
-    '''
-    L_x = (
-            T.sum(
-                v * T.log(T.nnet.sigmoid(w_t[-1])) +
-                (1 - v) * T.log(1 - T.nnet.sigmoid(w_t[-1])),
-                axis=1
-            )
-        )
-    '''
-    #L_x = T.nnet.binary_crossentropy(  T.nnet.sigmoid(w_t[-1,:,:]), v).sum( axis = 1)
-    #L_x =  ( (  (mu_x_t[-1,:,:] - v ) ** 2 )/ (  (sigma_x_t[-1,:,:]**2) + 1e-4 ) ).sum(axis = 1)
-    #L_x  = 0.5 * T.sum( (T.sqr(v - mu_x_t[-1,:,:]) * T.exp(-2*sigma_x_t[-1,:])) + (2*sigma_x_t[-1,:]) + T.log(2 * numpy.pi) , axis=1)
-    L_x  = 0.5 * T.sum(T.sum( (T.sqr(v - mu_x_t[:,-1,:,:]) * (1/T.sqr(sigma_x_t[:,-1,:,:])) ) + 2*T.log(sigma_x_t[:,-1,:,:]) + T.log(2 * numpy.pi) , axis=2), axis = 0)
+    
+    L_x  = 0.5 * T.sum(
+                 T.sum(
+                  (T.sqr(v - mu_x_t[:,-1,:,:]) * (1/T.sqr(sigma_x_t[:,-1,:,:])) )
+                    + 2*T.log(sigma_x_t[:,-1,:,:]) + T.log(2 * numpy.pi) , axis=2), axis = 0)
     cost = (L_z + L_x).mean()
     monitor = L_x.mean()
-    # symbolic loop for sequence generation
-    (hg_1, cg_1, g_mu_x_1, g_sigma_x_1 ), updates_generate = theano.scan(
-        lambda h_tm1, c_tm1, mu_x_tm1, sigma_x_tm1,  *_: generate(h_tm1, c_tm1, mu_x_tm1, sigma_x_tm1 ),
-        outputs_info=[ h0_dec, c0_dec, mu_x_0, sigma_x_0 ], non_sequences=params, n_steps=1)
 
-    
+    '''
     (h_t_enc, h_t_dec, c_t_enc, c_t_dec,  mu_z_t, sigma_z_t, g_mu_x_t, g_sigma_x_t  ), updates_generate2 = theano.scan(
         lambda sample_z_t, sample_x_t, h_tm1_enc, h_tm1_dec, c_tm1_enc, c_tm1_dec, mu_z_t, sigma_z_t, mu_x_tm1,sigma_x_tm1, *_: recurrence( sample_z_t, sample_x_t, h_tm1_enc, h_tm1_dec, c_tm1_enc, c_tm1_dec,  mu_z_t, sigma_z_t, mu_x_tm1, sigma_x_tm1,  None),
-        sequences=[rand_samples_z, rand_samples_x], outputs_info=[h0_enc, hg_1[-1,:,:], c0_enc, cg_1[-1,:,:],  mu_z_0, sigma_z_0,  g_mu_x_1[-1,:,:], g_sigma_x_1[-1,:,:]], non_sequences=params)
+        sequences=[rand_samples_z, rand_samples_x], outputs_info=[h0_enc, hg_1[-1,:,:], c0_enc, cg_1[-1,:,:],  mu_z_0, sigma_z_0,  g_mu_x_1[-1,:,:], g_sigma_x_1[-1,:,:]], non_sequences=full_params)
     
     updates_generate.update(updates_generate2)
-    
-    return (v, cost, monitor, params, updates_train, mu_x_t[-1,:,:],  g_mu_x_t[-1,:,:], g_sigma_x_t[-1,:,:],
+    '''
+    return (v, cost, monitor, full_params, updates_train, mu_x_t[:,-1,:,:],  g_mu_x_t, g_sigma_x_t,
             updates_generate)
 
 
@@ -588,7 +597,7 @@ class Rnn:
         n_hidden_recurrent=500,
         T_ = 5,
         lr=0.05,
-        r=(1, 6601), 
+        r=(1, 661), 
         batch_size =9,
         momentum=0.99999
     ):
