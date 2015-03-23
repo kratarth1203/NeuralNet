@@ -267,6 +267,24 @@ def shared_zeros(*shape):
     return theano.shared(numpy.zeros(shape, dtype=theano.config.floatX))
 
 
+def KLGaussianGaussian(mu1, logvar1, mu2, logvar2, tol=0.):
+    """
+    Re-parameterized formula for KL
+    between Gaussian predicted by encoder and Gaussian dist.
+
+    Parameters
+    ----------
+    mu1     : FullyConnected (Linear)
+    logvar1 : FullyConnected (Linear)
+    mu2     : FullyConnected (Linear)
+    logvar2 : FullyConnected (Linear)
+    """
+    logvar1 = T.log(T.exp(logvar1) + tol)
+    logvar2 = T.log(T.exp(logvar2) + tol)
+    kl = 0.5 * (logvar2 - logvar1 + (T.exp(logvar1) + (mu1 - mu2)**2) /
+                T.exp(logvar2) - 1)
+    return kl
+
 def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10, batch_size = 5, sigma_b = 1e-3):
     '''Construct a symbolic RNN-RBM and initialize parameters.
 
@@ -504,14 +522,22 @@ def build_rnn(n_visible = 784, n_z = 100, n_hidden_recurrent = 200, T_ = 10, bat
 
        return [ h_t_dec, c_t_dec, mu_x_t , sigma_x_t]
    
-    L_z = (
-        - T.log(sigma_z_t)
-        + 0.5 * (
-        T.sqr(sigma_z_t) + (mu_z_t) ** 2
-        )
-        - 0.5
-        ).sum(axis=-1).sum(axis = 0)
-
+    #L_z = (
+    #    - T.log(sigma_z_t)
+    #    + 0.5 * (
+    #    T.sqr(sigma_z_t) + (mu_z_t) ** 2
+    #    )
+    #    - 0.5
+    #    ).sum(axis=-1).sum(axis = 0)
+    L_z = T.sum(
+              T.sum( 
+              T.sum(KLGaussianGaussian(mu_prior.dimshuffle(0,'x',1,2) ,
+                                       sigma_prior.dimshuffle(0,'x',1,2) ,
+                                       mu_z_t,
+                                       sigma_z_t),
+              axis= 3),
+              axis =1),
+           axis = 0)
     #L_z = -(T.mean( 0.5 * ( (mew_t ** 2).sum() + (sigma_t ** 2).sum() - ( T.log(sigma_t ** 2) ).sum() ) ) - ( T_ / 2 ))
 
     #TODO
